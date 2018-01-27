@@ -2,8 +2,6 @@
 
 Package oidcauth is an authentication middleware for web applications and microservices, which uses an external [OpenID Connect](http://openid.net/connect/) identity provider (IdP) for user storage and authentication. 
 
-*Note: Work in progress. Not ready for production.*
-
 The library is configurable, except for some choices that have been pre-made on purpose:
  - Supports only the [authorization code flow]  (https://alexbilbie.com/guide-to-oauth-2-grants/#authorisation-code-grant-section-41) of OAuth2, which makes it suitable for multi-page web apps. If you are creating a SPA app, the implicit flow might be a better choice for your project.
  - Uses secure cookies to pass session IDs back and forth between the browser and the app. Session management is handled by [gorilla/sessions](https://github.com/gorilla/sessions), so you can use any of the many available implementations for it to choose where to store the session data (eg. CookieStore, RedisStore, DynamoStore, etc.).
