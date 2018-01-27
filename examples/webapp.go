@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +32,8 @@ func main() {
 		LogoutURL: os.Getenv("OIDC_LOGOUT_URL"),
 
 		CallbackURL: baseURL + "/auth/callback",
+
+		DefaultReturnURL: baseURL,
 
 		// Add the origin of your app and that of the IdP to the list.
 		// Use domain names in AllowedOrigins, not IP addresses.
@@ -63,7 +66,7 @@ func main() {
 
 	// Let the authenticator handle callback responses.
 	// A callback URL of your choice can be used, but it must match the one configured in config.CallbackURL.
-	http.Handle("/auth/callback", auth.CallbackHandler())
+	http.Handle("/auth/callback", auth.HandleAuthResponse())
 	// Allows the authenticator to logout both its own session and the session with the identity provider.
 	// A URL pattern of your choice can be used.
 	http.Handle("/auth/logout", auth.Logout(baseURL))
@@ -71,13 +74,33 @@ func main() {
 	// Example of a public handler that requires no authentication
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><body>Home page<br><a href="/protected-page">Protected page</a></body></html>`))
+		w.Write([]byte(`<html><body>Home page<hr><a href="/protected-page">Protected page</a></body></html>`))
 	})
 
 	// Example of using Authenticate middleware on a handler to protect content with authentication.
 	protectedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, _ := auth.GetClaims(r)
+
+		t, err := template.New("").Parse(`<html>
+			<body>
+				Hello <b>{{.name}}</b>,
+				<hr>
+				This is a web page with protected content.
+				<hr>
+				The E-mail address we have on record for you is <b>{{.email}}</b>
+				<hr>
+				Claims retrieved:<br>
+				{{.}}
+				<hr>
+				<a href="/auth/logout">Log out</a>
+			</body>
+			</html>`)
+		if err != nil {
+			http.Error(w, "Error!", http.StatusInternalServerError)
+		}
+
 		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(`<html><body>Protected content<br><a href="/auth/logout">Log out</a></body></html>`))
+		t.Execute(w, claims)
 	})
 	http.Handle("/protected-page", auth.AuthWithSession(protectedHandler))
 

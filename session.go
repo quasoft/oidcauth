@@ -62,19 +62,6 @@ func getSessionToken(session *sessions.Session, valueName string) (*oauth2.Token
 	return token, nil
 }
 
-/*
-func (a *Authenticator) getSessionOidcToken(req *http.Request) (*oauth2.Token, error) {
-	// Add id_token to the raw field of the token, as if it came
-	// from a URL query, just to make it compatible with other
-	// methods inside go-oidc
-	raw := make(url.Values)
-	raw["id_token"] = []string{rawIDToken}
-	token = token.WithExtra(raw)
-
-	return token, nil
-}
-*/
-
 func setSessionToken(session *sessions.Session, valueName string, value *oauth2.Token) error {
 	b, err := json.Marshal(value)
 	if err != nil {
