@@ -120,14 +120,22 @@ func (c Config) Validate() error {
 	return nil
 }
 
+type tokenVerifier interface {
+	Verify(ctx context.Context, token string) (*oidc.IDToken, error)
+}
+
+type oauthPackage interface {
+	AuthCodeURL(state string, opts ...oauth2.AuthCodeOption) string
+	Exchange(ctx context.Context, code string) (*oauth2.Token, error)
+}
+
 // The Authenticator type provides middleware methods for authentication of http requests.
 // A single authenticator object can be shared by concurrent goroutines.
 type Authenticator struct {
 	Config   Config
 	ctx      context.Context
-	provider *oidc.Provider
-	verifier *oidc.IDTokenVerifier
-	oauth2   *oauth2.Config
+	verifier tokenVerifier
+	oauth2   oauthPackage
 }
 
 // TODO: Don't just use log.*, use a configurable Logger object
@@ -165,7 +173,6 @@ func New(ctx context.Context, config *Config) (*Authenticator, error) {
 	var auth = &Authenticator{
 		Config:   *config,
 		ctx:      ctx,
-		provider: idp,
 		verifier: ver,
 		oauth2:   &oauthCfg,
 	}
@@ -305,30 +312,30 @@ func (a *Authenticator) GetAuthInfo(r *http.Request) (subject string, claims str
 }
 
 // GetClaims retrieves the claims that were sent by the IdP during authentication as a map.
-func (a *Authenticator) GetClaims(r *http.Request) (map[string]interface{}, bool) {
+func (a *Authenticator) GetClaims(r *http.Request) (map[string]interface{}, error) {
 	m := make(map[string]interface{})
 
 	err := a.IsAuthenticated(r)
 	if err != nil {
-		return m, false
+		return m, err
 	}
 
 	session, err := getSession(a.Config.SessionStore, r, "oidcauth")
 	if err != nil {
-		return m, false
+		return m, err
 	}
 	claims, err := getSessionStr(session, "claims")
 	if err != nil {
-		return m, false
+		return m, err
 	}
 
 	var data map[string]interface{}
 	err = json.Unmarshal([]byte(claims), &data)
 	if err != nil {
-		return data, false
+		return data, err
 	}
 
-	return data, true
+	return data, nil
 }
 
 // GetToken retrieves an oauth2.Token structure containing the access and refresh tokens.
@@ -440,11 +447,10 @@ func (a *Authenticator) VerifyAuthResponse() http.Handler {
 		claims := new(json.RawMessage)
 		err = idToken.Claims(&claims)
 		if err != nil {
-			log.Printf("Authentication failed: failed to retrieve claims from token: %v", err)
-			http.Error(w, "Error!", http.StatusBadRequest)
-			return
+			log.Printf("Authentication warning: failed to retrieve claims from token: %v", err)
+		} else {
+			log.Print("Claims retrieved successfully")
 		}
-		log.Print("Claims retrieved successfully")
 
 		log.Print("Creating session")
 		err = a.createSession(w, r, token, idToken, claims)
@@ -496,7 +502,7 @@ func (a *Authenticator) AuthWithSession(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}),
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "Error!", http.StatusBadRequest)
+			http.Error(w, "Error!", http.StatusForbidden)
 		}),
 	)
 }
@@ -510,7 +516,7 @@ func (a *Authenticator) HandleAuthResponse() http.Handler {
 		a.Config.AllowedOrigins,
 		a.VerifyAuthResponse(),
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "Error!", http.StatusBadRequest)
+			http.Error(w, "Error!", http.StatusForbidden)
 		}),
 	)
 }
