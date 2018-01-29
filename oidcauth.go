@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"context"
@@ -135,7 +136,7 @@ type Authenticator struct {
 	Config   Config
 	ctx      context.Context
 	verifier tokenVerifier
-	oauth2   oauthPackage
+	oauthPkg oauthPackage
 }
 
 // TODO: Don't just use log.*, use a configurable Logger object
@@ -174,7 +175,7 @@ func New(ctx context.Context, config *Config) (*Authenticator, error) {
 		Config:   *config,
 		ctx:      ctx,
 		verifier: ver,
-		oauth2:   &oauthCfg,
+		oauthPkg: &oauthCfg,
 	}
 	return auth, nil
 }
@@ -188,22 +189,8 @@ func (a *Authenticator) createSession(
 	idToken *oidc.IDToken,
 	claims *json.RawMessage,
 ) error {
-	// Save the token structure containing the access and refresh tokens in a separate
-	// store as the total size of that structure can reach 2-3KB, which is close to the
-	// usual limit of 4KB in most session storages (eg. in cookies, when using CookieStore).
-	tokenSession, err := getSession(a.Config.TokenStore, r, "oidcauth-token")
+	err := a.SetToken(w, r, token)
 	if err != nil {
-		log.Printf("Could not get token store: %v", err)
-		return err
-	}
-	err = setSessionToken(tokenSession, "token", token)
-	if err != nil {
-		log.Printf("Could not store token structure: %v", err)
-		return err
-	}
-	err = tokenSession.Save(r, w)
-	if err != nil {
-		log.Printf("Could not save token to store: %v", err)
 		return err
 	}
 
@@ -357,6 +344,58 @@ func (a *Authenticator) GetToken(r *http.Request) (*oauth2.Token, error) {
 	return token, nil
 }
 
+// SetToken updates the token value stored in the session.
+func (a *Authenticator) SetToken(
+	w http.ResponseWriter,
+	r *http.Request,
+	token *oauth2.Token,
+) error {
+	// Save the token structure containing the access and refresh tokens in a separate
+	// store as the total size of that structure can reach 2-3KB, which is close to the
+	// usual limit of 4KB in most session storages (eg. in cookies, when using CookieStore).
+	tokenSession, err := getSession(a.Config.TokenStore, r, "oidcauth-token")
+	if err != nil {
+		log.Printf("Could not get token store: %v", err)
+		return err
+	}
+	err = setSessionToken(tokenSession, "token", token)
+	if err != nil {
+		log.Printf("Could not store token structure: %v", err)
+		return err
+	}
+	err = tokenSession.Save(r, w)
+	if err != nil {
+		log.Printf("Could not save token to store: %v", err)
+		return err
+	}
+	return nil
+}
+
+// Client is a wrapper to the underlying Client() method of oauth2.Config object,
+// which returns an http.Client that automatically populates the authorization header.
+// with the access token.
+// If the token stored in the session has expired, uses the refresh_token to renew
+// it automatically and stores the updated token in the session.
+func (a *Authenticator) Client(ctx context.Context, w http.ResponseWriter, r *http.Request) (*http.Client, error) {
+	token, err := a.GetToken(r)
+	if err != nil {
+		return nil, fmt.Errorf("no token to use for http client: %v", err)
+	}
+
+	client := a.oauthPkg.(*oauth2.Config).Client(ctx, token)
+	transport := client.Transport.(*oauth2.Transport)
+	newToken, err := transport.Source.Token()
+	if err != nil {
+		return nil, fmt.Errorf("no token in client transport: %v", err)
+	}
+
+	if !reflect.DeepEqual(token, newToken) {
+		a.SetToken(w, r, newToken)
+	}
+
+	return client, nil
+}
+
 // RedirectToLoginPage redirects the request to the login endpoint of the identity provider.
 func (a *Authenticator) RedirectToLoginPage(w http.ResponseWriter, r *http.Request) {
 	returnURL := a.Config.DefaultReturnURL
@@ -369,7 +408,7 @@ func (a *Authenticator) RedirectToLoginPage(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Error!", http.StatusInternalServerError)
 		return
 	}
-	url := a.oauth2.AuthCodeURL(state)
+	url := a.oauthPkg.AuthCodeURL(state)
 	log.Printf("Requested %s, redirecting to auth server (%s)...", returnURL, url)
 	http.Redirect(w, r, url, http.StatusFound)
 }
@@ -420,7 +459,7 @@ func (a *Authenticator) VerifyAuthResponse() http.Handler {
 			return
 		}
 		authCode := r.URL.Query().Get("code")
-		token, err := a.oauth2.Exchange(r.Context(), authCode)
+		token, err := a.oauthPkg.Exchange(r.Context(), authCode)
 		if err != nil {
 			log.Printf("Authentication failed: failed to exchange token: %v", err)
 			http.Error(w, "Error!", http.StatusBadRequest)

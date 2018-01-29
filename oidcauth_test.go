@@ -91,7 +91,7 @@ func newAuthenticator() *Authenticator {
 	var auth = &Authenticator{
 		Config:   *config,
 		verifier: &verifier,
-		oauth2:   &oauthCfg,
+		oauthPkg: &oauthCfg,
 	}
 	return auth
 }
@@ -169,7 +169,7 @@ func TestHandleAuthResponse_OK(t *testing.T) {
 
 func TestHandleAuthResponse_OAuth2Exchange_Fail(t *testing.T) {
 	auth := newAuthenticator()
-	auth.oauth2.(*stubOAuthPackage).exchangeOK = false // return error in the simulated call to Exchange
+	auth.oauthPkg.(*stubOAuthPackage).exchangeOK = false // return error in the simulated call to Exchange
 
 	stateStore := auth.Config.StateStore.(*oauth2state.MemStateStore)
 	stateStore.SetValueGenerator(StubValueGenerator{42})
